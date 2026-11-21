@@ -168,7 +168,7 @@ queue's stronger ordering guarantee.
 
 - **The queue closes the tested/landed gap; approval does not.** Entries 1 and 2
   predate the queue and establish only that under strict up-to-date the landed
-  tree equals the tested tree. Entries 3 to 10 are queued merges where the landed
+  tree equals the tested tree. Entries 3 to 12 are queued merges where the landed
   commit *is* the tested commit, so on that path the two cannot diverge. What
   remains is independent authorization: `required_approving_review_count` is 0,
   and the same account writes, merges and administers, so the merge is enforced
@@ -206,8 +206,8 @@ Entries are appended by a change that merges *after* the one being described,
 because a commit cannot contain its own merge SHAs. The table records every
 merge completed under this channel up to the change that wrote it; the merge
 that lands the newest entry is checked by the same procedure and becomes the next
-entry when one is added. Ten consecutive entries show this is not a single-run
-accident: two merges under strict up-to-date and eight through the queue. Every
+entry when one is added. Twelve consecutive entries show this is not a single-run
+accident: two merges under strict up-to-date and ten through the queue. Every
 merge after entry 1 went through this channel.
 
 | Entry | PR | Tested tree | Landed commit | Landed tree | Equal |
@@ -222,6 +222,8 @@ merge after entry 1 went through this channel.
 | 8 | #17 | `495b9e210f6b0c7f3229243fdbc5f29de8d0d2fb` | `5f97463a06c185f2a45da30233d2ca09374d8362` | `495b9e210f6b0c7f3229243fdbc5f29de8d0d2fb` | yes |
 | 9 | #18 | `86eaf8c183627a0d9398e3bd1983b0377acb8629` | `d2bb39bb241592a91b3b48c0dc56c1b661433fd7` | `86eaf8c183627a0d9398e3bd1983b0377acb8629` | yes |
 | 10 | #19 | `a0a8b5a0ea93cb0c87edf15b9217eff3b7c240cc` | `8fb3d47c42f578119ee99ea8a90ed4a3e7623de3` | `a0a8b5a0ea93cb0c87edf15b9217eff3b7c240cc` | yes |
+| 11 | #20 | `610ebd8a07830fe019786f78f037c595d949d8a7` | `6be059dcf77f1dfa812b43798d62d84714cd16a0` | `610ebd8a07830fe019786f78f037c595d949d8a7` | yes |
+| 12 | #21 | `6d534a4f4e5257c4f8de389563b0f0097ed3a890` | `3b5f799cf247c214b3ec8a1fd3da6ff1b9c1b9e8` | `6d534a4f4e5257c4f8de389563b0f0097ed3a890` | yes |
 
 ### Entry 1, PR #9
 
@@ -419,6 +421,47 @@ one. It also shows that adding gate steps does not bypass the channel: a
 `pull_request` event checked the new steps, and the `merge_group` event re-ran
 the same `gates` job on the queue's rebuild.
 
+### Entry 11, PR #20 — the log entry for entries 9 and 10
+
+- Base: `8fb3d47c42f578119ee99ea8a90ed4a3e7623de3` (entry 10's landed commit).
+- Head: `18f9c5c708de1b13bc73fcce2d9cdc41ccff400a`, tree
+  `610ebd8a07830fe019786f78f037c595d949d8a7`.
+- `pull_request` runs on the head: `44913017247` (`gates`) and `44913017277`
+  (`determinism`), both `success`; the seven required contexts passed on the PR.
+- `merge_group` runs on head `6be059dcf77f1dfa812b43798d62d84714cd16a0`:
+  `44913453245` (`gates`) and `44913453451` (`determinism`), both `success`.
+- The queue merged at 2026-11-21T14:27:52Z.
+- Landed commit `6be059dcf77f1dfa812b43798d62d84714cd16a0`, tree
+  `610ebd8a07830fe019786f78f037c595d949d8a7`, first parent
+  `8fb3d47c42f578119ee99ea8a90ed4a3e7623de3`.
+
+`origin/main` is the `merge_group` head, so the strong form holds. Entries 11 and
+12 are recorded together because this node's PR was opened before entry 11's
+merge landed; the log stays append-only in the sense that no earlier row or
+narrative is edited, only that two rows are added by one change.
+
+### Entry 12, PR #21 — the first closure-layer change under the channel
+
+- Base: `6be059dcf77f1dfa812b43798d62d84714cd16a0` (entry 11's landed commit).
+- Head: `599ad1a2985b15f22c42e0f94b980308f898096d`, tree
+  `6d534a4f4e5257c4f8de389563b0f0097ed3a890`.
+- `pull_request` runs on the head: `44916922817` (`gates`) and `44916922841`
+  (`determinism`), both `success`. All seven required contexts passed, so the
+  change's own gate steps (including `check_h2a_rows.py` over §2 + §3) ran on the
+  change before the queue saw it.
+- `merge_group` runs on head `3b5f799cf247c214b3ec8a1fd3da6ff1b9c1b9e8`:
+  `44917515721` (`gates`) and `44917515707` (`determinism`), both `success`.
+- The queue merged at 2026-11-21T15:13:00Z.
+- Landed commit `3b5f799cf247c214b3ec8a1fd3da6ff1b9c1b9e8`, tree
+  `6d534a4f4e5257c4f8de389563b0f0097ed3a890`, first parent
+  `6be059dcf77f1dfa812b43798d62d84714cd16a0`.
+
+`origin/main` is again the `merge_group` head. One channel detail is worth
+recording: `gh pr merge 21 --auto --merge` was refused with "the merge strategy
+for main is set by the merge queue", and `gh pr merge 21 --auto` was accepted.
+The strategy is a property of the queue, not of the caller, so a caller cannot
+select a merge method that the gated rebuild did not test.
+
 ## 7. Merge queue after the organization transfer
 
 Later on 2026-11-20 the repository was transferred from `Mr-enthalpy/MonAsm` to
@@ -471,8 +514,8 @@ The enabled rule, verbatim:
    gates ran on *is* the commit on `main`, not merely one with the same tree.
 5. Cross-check `origin/main^{tree}` against `refs/pull/<n>/merge^{tree}`.
 
-The queued merges are entries 3 to 10; their values are recorded by the changes
-that follow them, as §6 explains. All eight were groups of one entry, so the queue
+The queued merges are entries 3 to 12; their values are recorded by the changes
+that follow them, as §6 explains. All ten were groups of one entry, so the queue
 has still not been observed merging a combined group.
 
 ## 8. Gate-input provenance: commit pins and the pinning policy
