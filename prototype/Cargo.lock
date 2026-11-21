@@ -57,6 +57,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "fmp-definition"
+version = "0.0.0"
+dependencies = [
+ "fmp-model",
+]
+
+[[package]]
 name = "fmp-materialize"
 version = "0.0.0"
 dependencies = [
