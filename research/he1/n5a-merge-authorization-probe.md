@@ -96,9 +96,10 @@ GitHub restricts it to organization-owned public repositories, and the
 repository was then user-owned, so every `merge_queue` payload returned
 `422 Invalid rule 'merge_queue'`. The repository was then transferred to the
 `Teancher-H` organization, the same payload was accepted, and the first queued
-merge landed with `origin/main` equal to the `merge_group` head SHA. Six
-entries, including four queued ones, are recorded in
-`research/he1/n5a-protected-merge-trial.md`.
+merge landed with `origin/main` equal to the `merge_group` head SHA. Eight
+entries, including six queued ones, are recorded in
+`research/he1/n5a-protected-merge-trial.md`; entry 8 is the first one gated with
+the pinning policy already on.
 
 Gate-input provenance was closed afterwards: every `uses:` in the three
 workflows names a full commit, and `sha_pinning_required` is `true`, so a tag
