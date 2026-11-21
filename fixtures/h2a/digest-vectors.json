@@ -1,0 +1,101 @@
+{
+  "note": "Fixed vectors from ADR-0128 sections 7.0 and 8.2. The canonical strings are byte-for-byte the ones in the ADR, and the expected digests are the values the ADR states. Two implementations must reproduce them: the Rust tests in fmp-definition and tools/check_package_vectors.py. Do not edit a canonical string to make an implementation pass; a change here is a format change.",
+  "domain_vectors": [
+    {
+      "name": "source_package_digest",
+      "domain": "monasm-package/0.1",
+      "canonical": "{\"assets\":[{\"digest\":\"sha256:dedb7fdf0544fde88996bcc92886284ac32930e99c0db6bce62ef60fedb71301\",\"kind\":\"form\",\"path\":\"forms/example.json\"}],\"manifest\":{\"definition_format\":\"fmp-def/0.1\",\"dependencies\":[],\"exports\":{\"forms\":[{\"id\":\"x86:example/form\",\"path\":\"forms/example.json\"}],\"profiles\":[],\"types\":[]},\"package_format\":\"monasm-package/0.1\",\"package_id\":\"monasm.x86.example\",\"requires_capabilities\":[],\"target_identity\":{\"address_width\":64,\"byte_order\":\"little\",\"enabled_extensions\":[],\"execution_mode\":\"64\",\"isa_family\":\"x86\",\"isa_variant\":\"x86-64\"},\"target_profile\":\"monasm.target.x86_64\",\"version\":\"0.1.0\"}}",
+      "expected": "sha256:1afee65ce87cd9e5ff52f7ae8db11fdb6f7c62201e315641417c4e78cb12bca0"
+    },
+    {
+      "name": "dependent_source_package_digest",
+      "domain": "monasm-package/0.1",
+      "canonical": "{\"assets\":[{\"digest\":\"sha256:93e471b1fda937f2a3cab2b0de0d6131f347a4b967972960ca76bf4a4d7b0ccc\",\"kind\":\"form\",\"path\":\"forms/dependent.json\"}],\"manifest\":{\"definition_format\":\"fmp-def/0.1\",\"dependencies\":[{\"package_id\":\"monasm.x86.base\",\"source_package_digest\":\"sha256:231b9034ecbe6c9f806f7f2a647295e47a57cddcff47e4afacb24c98510648bf\",\"version\":\"0.1.0\"}],\"exports\":{\"forms\":[{\"id\":\"x86:example/dependent\",\"path\":\"forms/dependent.json\"}],\"profiles\":[],\"types\":[]},\"package_format\":\"monasm-package/0.1\",\"package_id\":\"monasm.x86.dependent\",\"requires_capabilities\":[],\"target_identity\":{\"address_width\":64,\"byte_order\":\"little\",\"enabled_extensions\":[],\"execution_mode\":\"64\",\"isa_family\":\"x86\",\"isa_variant\":\"x86-64\"},\"target_profile\":\"monasm.target.x86_64\",\"version\":\"0.1.0\"}}",
+      "expected": "sha256:637edab0e19dc949bf44994d36fd703b97ecf3d9145d2648f22729b16f748251"
+    },
+    {
+      "name": "bundle_digest",
+      "domain": "monasm-bundle/0.1",
+      "canonical": "{\"bundle_id\":\"monasm.bundle.x86.example\",\"definition_digest\":\"sha256:c6bfa90e3fa100f1613537c48cec23e510c424927a2ac62c9bb4449b7f4ebbad\",\"definition_format\":\"fmp-def/0.1\",\"form_owners\":[],\"namespace\":\"monasm.isa.x86\",\"packages\":[{\"enabled_extensions\":[],\"package_id\":\"monasm.x86.example\",\"source_package_digest\":\"sha256:1afee65ce87cd9e5ff52f7ae8db11fdb6f7c62201e315641417c4e78cb12bca0\",\"version\":\"0.1.0\"}],\"target\":{\"identity\":{\"address_width\":64,\"byte_order\":\"little\",\"enabled_extensions\":[],\"execution_mode\":\"64\",\"isa_family\":\"x86\",\"isa_variant\":\"x86-64\"},\"profile_id\":\"monasm.target.x86_64\"},\"version\":\"0.1.0-h2\"}",
+      "expected": "sha256:a9bc3395c783e029aaeb8f362a2f806ade40cf8d965137096b26b13ac20dc5cc"
+    },
+    {
+      "name": "release_digest",
+      "domain": "monasm-release/0.1",
+      "canonical": "{\"bundle_digest\":\"sha256:a9bc3395c783e029aaeb8f362a2f806ade40cf8d965137096b26b13ac20dc5cc\",\"bundle_id\":\"monasm.bundle.x86.example\",\"definition_digest\":\"sha256:c6bfa90e3fa100f1613537c48cec23e510c424927a2ac62c9bb4449b7f4ebbad\",\"packages\":[{\"package_id\":\"monasm.x86.example\",\"source_package_digest\":\"sha256:1afee65ce87cd9e5ff52f7ae8db11fdb6f7c62201e315641417c4e78cb12bca0\",\"version\":\"0.1.0\"}]}",
+      "expected": "sha256:2416911a9c80357c40410a73db27cd1a966c73a72d354f651c95208e596ad3ad"
+    },
+    {
+      "name": "evidence_digest",
+      "domain": "monasm-evidence/0.1",
+      "canonical": "{\"evidence_format\":\"monasm-evidence/0.1\",\"files\":[{\"path\":\"NOTICE\",\"sha256\":\"5743f7fcbdc81aa8600dca2f8bb33dd2eca8b401fbe27a015d88d746864c46c3\"},{\"path\":\"evidence/case-1.json\",\"sha256\":\"1200459233341d292198e50574e7690b0bb3b5ed6bc5f0d3553dffe3571df469\"},{\"path\":\"evidence/legacy-source.md\",\"sha256\":\"520113bc00bd2912112e819e0338a65192ba25802986a691021a27cf7b38088c\"},{\"path\":\"tests/cases.json\",\"sha256\":\"fa00a63d0185a6087c8cffd3ba5e232575222d7651b13caf068c8aafc0afcc10\"}],\"oracle\":{\"command\":\"tools/oracle/rerun.py --case X86-P1\",\"skips\":[],\"status\":\"reproduced\"},\"sources\":[{\"note\":\"x86_64/0.1.0 rows\",\"path\":\"evidence/legacy-source.md\"}]}",
+      "expected": "sha256:e94738716ffc56d6f1a865c463fee4afae03835d51ef234bff2c213e321f931a"
+    },
+    {
+      "name": "release_digest_with_evidence",
+      "domain": "monasm-release/0.1",
+      "canonical": "{\"bundle_digest\":\"sha256:a9bc3395c783e029aaeb8f362a2f806ade40cf8d965137096b26b13ac20dc5cc\",\"bundle_id\":\"monasm.bundle.x86.example\",\"definition_digest\":\"sha256:c6bfa90e3fa100f1613537c48cec23e510c424927a2ac62c9bb4449b7f4ebbad\",\"packages\":[{\"evidence_digest\":\"sha256:e94738716ffc56d6f1a865c463fee4afae03835d51ef234bff2c213e321f931a\",\"package_id\":\"monasm.x86.example\",\"source_package_digest\":\"sha256:1afee65ce87cd9e5ff52f7ae8db11fdb6f7c62201e315641417c4e78cb12bca0\",\"version\":\"0.1.0\"}]}",
+      "expected": "sha256:45a4004eef811f70a02b796e8b2b8ca4cce0626c189567b2e5e9d00f0ee98767"
+    }
+  ],
+  "canonical_vectors": [
+    {
+      "name": "asset",
+      "canonical": "{\"form_id\":\"x86:example/form\",\"template\":\"90\"}",
+      "expected": "sha256:dedb7fdf0544fde88996bcc92886284ac32930e99c0db6bce62ef60fedb71301"
+    },
+    {
+      "name": "dependent_asset",
+      "canonical": "{\"form_id\":\"x86:example/dependent\",\"template\":\"90\"}",
+      "expected": "sha256:93e471b1fda937f2a3cab2b0de0d6131f347a4b967972960ca76bf4a4d7b0ccc"
+    }
+  ],
+  "raw_vectors": [
+    {
+      "name": "NOTICE",
+      "bytes": "MonAsm example package. SPDX-License-Identifier: Apache-2.0\n",
+      "expected": "5743f7fcbdc81aa8600dca2f8bb33dd2eca8b401fbe27a015d88d746864c46c3"
+    },
+    {
+      "name": "evidence/legacy-source.md",
+      "bytes": "x86_64/0.1.0: x86:mov/rm-r64/legacy, x86:mov/r64-rm/legacy\n",
+      "expected": "520113bc00bd2912112e819e0338a65192ba25802986a691021a27cf7b38088c"
+    },
+    {
+      "name": "tests/cases.json",
+      "bytes": "{\"cases_format\":\"monasm-cases/0.1\",\"cases\":[]}\n",
+      "expected": "fa00a63d0185a6087c8cffd3ba5e232575222d7651b13caf068c8aafc0afcc10"
+    },
+    {
+      "name": "evidence/case-1.json",
+      "bytes": "{\"case_id\":\"x86-example-pos\",\"oracle\":\"llvm-mc\"}\n",
+      "expected": "1200459233341d292198e50574e7690b0bb3b5ed6bc5f0d3553dffe3571df469"
+    }
+  ],
+  "records": [
+    {
+      "name": "source",
+      "manifest": "{\"definition_format\":\"fmp-def/0.1\",\"dependencies\":[],\"exports\":{\"forms\":[{\"id\":\"x86:example/form\",\"path\":\"forms/example.json\"}],\"profiles\":[],\"types\":[]},\"package_format\":\"monasm-package/0.1\",\"package_id\":\"monasm.x86.example\",\"requires_capabilities\":[],\"target_identity\":{\"address_width\":64,\"byte_order\":\"little\",\"enabled_extensions\":[],\"execution_mode\":\"64\",\"isa_family\":\"x86\",\"isa_variant\":\"x86-64\"},\"target_profile\":\"monasm.target.x86_64\",\"version\":\"0.1.0\"}",
+      "assets": [
+        {
+          "kind": "form",
+          "path": "forms/example.json",
+          "canonical": "{\"form_id\":\"x86:example/form\",\"template\":\"90\"}"
+        }
+      ],
+      "expected_digest": "sha256:1afee65ce87cd9e5ff52f7ae8db11fdb6f7c62201e315641417c4e78cb12bca0"
+    },
+    {
+      "name": "dependent_source",
+      "manifest": "{\"definition_format\":\"fmp-def/0.1\",\"dependencies\":[{\"package_id\":\"monasm.x86.base\",\"source_package_digest\":\"sha256:231b9034ecbe6c9f806f7f2a647295e47a57cddcff47e4afacb24c98510648bf\",\"version\":\"0.1.0\"}],\"exports\":{\"forms\":[{\"id\":\"x86:example/dependent\",\"path\":\"forms/dependent.json\"}],\"profiles\":[],\"types\":[]},\"package_format\":\"monasm-package/0.1\",\"package_id\":\"monasm.x86.dependent\",\"requires_capabilities\":[],\"target_identity\":{\"address_width\":64,\"byte_order\":\"little\",\"enabled_extensions\":[],\"execution_mode\":\"64\",\"isa_family\":\"x86\",\"isa_variant\":\"x86-64\"},\"target_profile\":\"monasm.target.x86_64\",\"version\":\"0.1.0\"}",
+      "assets": [
+        {
+          "kind": "form",
+          "path": "forms/dependent.json",
+          "canonical": "{\"form_id\":\"x86:example/dependent\",\"template\":\"90\"}"
+        }
+      ],
+      "expected_digest": "sha256:637edab0e19dc949bf44994d36fd703b97ecf3d9145d2648f22729b16f748251"
+    }
+  ]
+}

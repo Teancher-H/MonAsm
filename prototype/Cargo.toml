@@ -6,6 +6,7 @@ members = [
     "crates/fmp-materialize",
     "crates/fmp-plan",
     "crates/fmp-cli",
+    "crates/fmp-definition",
 ]
 
 [workspace.package]

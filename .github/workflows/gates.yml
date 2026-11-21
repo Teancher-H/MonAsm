@@ -8,6 +8,11 @@ name: gates
 # parity, determinism), the whitespace gate, and `tools/oracle/rerun.py` against
 # the LLVM version the oracle records pin.
 #
+# `ADR-0128` adds two document gates: `check_package_vectors.py` recomputes the
+# §7.0 digest preimages from `fixtures/h2a/digest-vectors.json` and refuses a
+# fixture value the ADR no longer contains, and `check_h2a_rows.py` refuses a
+# checklist row that no `#[test]` names (and a test that no row names).
+#
 # `ADR-0127` also requires the numeric-bound tests in release, because a
 # wrapping shift or subtraction that panics in debug can silently succeed and
 # emit the wrong bytes in release. The workspace job runs that small set with
@@ -86,6 +91,18 @@ jobs:
       # vectors. This is the only hosted check of the Python reference encoder.
       - name: Identity vectors reproduce in the Python encoder
         run: python tools/plan_identity.py --check
+
+      # `ADR-0128` §7.0: the package digest preimages reproduce in Python as well
+      # as in Rust, and every expected value is still present in the ADR. The
+      # Rust half is `prototype/crates/fmp-definition/tests/n1a_digest.rs`; both
+      # read `fixtures/h2a/digest-vectors.json`, so neither is its own oracle.
+      - name: Package digest vectors reproduce in the Python encoder
+        run: python tools/check_package_vectors.py
+
+      # A row in the checklist is a claim that a test drives it. Section 2 is
+      # N1a; each later node adds its own range when it lands.
+      - name: Every N1a checklist row names a test
+        run: python tools/check_h2a_rows.py
 
       - name: Whitespace and line endings
         env:

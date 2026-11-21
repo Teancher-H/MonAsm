@@ -44,8 +44,6 @@ V-A 节点（N1a/N2/N3/N4a）不等待任何外部平台事实；V-P 节点（N1
 - `a_file_change_between_digest_and_merge_is_not_observed` — 摘要与合并必须消费同一份已加载字节；不允许摘要来自 A、合并来自 B；重放得同一 `definition_digest`。`H2-D9`、`ADR-0128` §9
 - `a_package_path_cannot_escape_its_root` — `../`、绝对路径、任一中间段越界在打开前拒绝（`path-escape`）；不跟随与替换绑定部分见 §6.1。`H2-D3`
 - `identifier_and_path_lexical_rules_are_platform_independent` — 大写、空段、尾点、Windows 设备名在三个平台都是格式拒绝（退出 1），不是某平台 I/O 失败。`ADR-0128` §1.3；证据：三平台
-- `the_same_relative_path_in_two_packages_is_legal` — 包根相对冲突域与仓库根相对冲突域分离；两个包各自的 `forms/add.json` 合法。
-- `a_cross_package_path_alias_is_rejected` — 两个包根折叠成同一仓库路径，或同一 `packages[].path` 列两次 → `path-lexical`。
 - `a_package_path_keeps_the_full_package_id` — 目录段等于完整 `package_id`；`monasm.x86.crypto` 与 `vendor.x86.crypto` 可共存。
 - `the_manifest_is_closed` — 未知键、缺必需键、重复键拒绝；可选键缺失合法。`INV-07`
 - `an_empty_forms_list_is_refused` — `exports.forms: []` → `empty-package`，在 `read` 之前拒绝。
@@ -58,17 +56,13 @@ V-A 节点（N1a/N2/N3/N4a）不等待任何外部平台事实；V-P 节点（N1
 - `a_non_empty_reserved_asset_is_refused_forever_under_0_1` — `monasm-package/0.1` 的含义由版本决定；升级构建器不得把同一份清单从拒绝变成接受。
 - `a_case_evidence_must_be_listed_and_hashed` — 清单存在时，用例证据未列出或哈希不符 → `case-evidence-mismatch`。
 - `an_evidence_hash_covers_raw_file_bytes` — 哈希对象是原始字节；CRLF/LF、缩进、尾随换行都算变更。
-- `the_case_file_is_part_of_the_release_digest` — 改 `tests/cases.json` 并同步清单 → `evidence_digest`/`release_digest` 变，`definition_digest` 不变。
 - `the_release_mode_requires_complete_evidence` — 缺 cases 条目、`NOTICE`、`sources`、`oracle.status` 或 skip 理由 → `evidence-incomplete`。
 - `a_deep_json_document_is_refused_before_recursion` — 深度扫描先于 `json::parse`，不靠栈溢出兜底。
 - `the_asset_budget_is_counted_while_reading` — 累计到上限即拒绝，不只信 `stat`，也不被读时增长的文件绕过。
 - `the_legacy_source_path_components_are_strict` — `isa`/`version` 在拼路径之前按组件校验。
 - `only_executable_inputs_enter_the_source_digest` — README/NOTICE 不入源摘要；form 行改动入。
-- `evidence_changes_do_not_move_the_definition_digest` — 证据变化只动 `evidence_digest`/`release_digest`。
 - `an_evidence_entry_must_stay_inside_the_package_and_match_its_hash` — `../` 或错误 sha256 → `evidence-mismatch`。
-- `release_digest_tracks_the_release_not_the_builder` — 同 bundle 不同证据 → 不同 release 摘要；builder 版本变化不影响。
 - `changing_the_legacy_source_changes_the_source_digest` — `0.1.0` 改成 `0.78.0` 改变源摘要；行未改时行相等测试随即失败。
-- `the_artifact_filename_matches_its_bundle_id` — spec/lock/sealed/legacy 文件名必须等于 `bundle_id`，否则 `bundle-file-mismatch`。
 - `a_legacy_package_target_must_match_its_source` — 行逐字节不变但 `execution_mode`/`address_width` 改动 → `legacy-target-mismatch`，在 `read` 前拒绝。
 - `a_set_equal_target_migrates_a_differently_ordered_legacy_array` — `TargetEq` 按集合比较扩展；新包仍按升序写，legacy 原样保留。
 - `the_digest_preimage_vector_matches` — Rust 与 Python 都得到 `1afee65c…`；把嵌套摘要写成原始 32 字节则不匹配。证据：跨语言向量
@@ -78,14 +72,26 @@ V-A 节点（N1a/N2/N3/N4a）不等待任何外部平台事实；V-P 节点（N1
 - `resource_limits_are_enforced` — 文件数、大小、路径、依赖深度、闭包累计、资产数、嵌套深度的上限；具体预算行分属 §3/§4/§5，本行是总入口。
 - `every_package_form_equals_the_pinned_legacy_row` — 逐 form canonical 相等，比较对象是钉住版本。`HE-AC-03`、`HE-AC-11`；H2a 只覆盖 x86
 - `a_form_row_is_compared_against_its_pinned_version_not_the_newest_file` — 把钉住版本换成最新文件即判不等；构建器不自动改用最新。
-- `editing_cases_json_changes_the_release_identity` — 改用例并更新清单 → 证据/发布身份变，机器码与 `definition_digest` 不变。
-- `evidence_digest_tracks_case_evidence` — 改证据文件或清单 → `evidence_digest`/`release_digest` 变，`definition_digest` 不变。
 
 ## 3. N2 — 闭包与 sealed
 
 严格排序、显式闭包、归属与身份唯一、form ⊆ 包 ⊆ bundle、合并前逐包 `read`，
 以及由 sealed 自身重算两个摘要。
 
+下列行从 §2 移入：前三条需要两个包根或 spec/lock 文件名，本身属于闭包层；后五条
+需要由合并文档产生的 `definition_digest`，或需要 release metadata。证据字节规则仍在
+§2（`an_evidence_hash_covers_raw_file_bytes`、
+`an_evidence_entry_must_stay_inside_the_package_and_match_its_hash`），这里补的是它与
+定义/发布身份的关系。移动是执行索引的重新归属，不改变任何语义。
+
+- `the_same_relative_path_in_two_packages_is_legal` — 包根相对冲突域与仓库根相对冲突域分离；两个包各自的 `forms/add.json` 合法。
+- `a_cross_package_path_alias_is_rejected` — 两个包根折叠成同一仓库路径，或同一 `packages[].path` 列两次 → `path-lexical`。
+- `the_artifact_filename_matches_its_bundle_id` — spec/lock/sealed/legacy 文件名必须等于 `bundle_id`，否则 `bundle-file-mismatch`。
+- `the_case_file_is_part_of_the_release_digest` — 改 `tests/cases.json` 并同步清单 → `evidence_digest`/`release_digest` 变，`definition_digest` 不变。
+- `evidence_changes_do_not_move_the_definition_digest` — 证据变化只动 `evidence_digest`/`release_digest`。
+- `release_digest_tracks_the_release_not_the_builder` — 同 bundle 不同证据 → 不同 release 摘要；builder 版本变化不影响。
+- `editing_cases_json_changes_the_release_identity` — 改用例并更新清单 → 证据/发布身份变，机器码与 `definition_digest` 不变。
+- `evidence_digest_tracks_case_evidence` — 改证据文件或清单 → `evidence_digest`/`release_digest` 变，`definition_digest` 不变。
 - `the_same_inputs_build_to_the_same_bundle_digest` — 两次构建、两个临时目录、不同创建顺序 → 同一 `bundle_digest` 与同一 sealed 字节。`HE-T05`
 - `an_unsorted_spec_is_rejected` — spec 的 `packages` 逆序或非严格排序 → 确定性拒绝，不静默重排。`HE-T16`
 - `package_discovery_order_does_not_change_the_bundle` — 目录创建顺序、读取顺序、内部集合迭代顺序都不影响字节。`HE-T16`
