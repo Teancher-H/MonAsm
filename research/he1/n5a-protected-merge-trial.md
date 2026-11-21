@@ -168,7 +168,7 @@ queue's stronger ordering guarantee.
 
 - **The queue closes the tested/landed gap; approval does not.** Entries 1 and 2
   predate the queue and establish only that under strict up-to-date the landed
-  tree equals the tested tree. Entries 3 to 6 are queued merges where the landed
+  tree equals the tested tree. Entries 3 to 8 are queued merges where the landed
   commit *is* the tested commit, so on that path the two cannot diverge. What
   remains is independent authorization: `required_approving_review_count` is 0,
   and the same account writes, merges and administers, so the merge is enforced
@@ -186,6 +186,12 @@ queue's stronger ordering guarantee.
   `pull_request` and `merge_group` events the checks come from the revision's own
   workflow files. The ruleset makes such a change reviewable and recorded; it
   does not make the change self-verifying.
+- **The pinning policy is on, not proven unchanged.** `sha_pinning_required` is
+  a repository setting read once at §8's time; every later entry only shows that
+  the policy was in force while that entry's checks ran. Nothing in this log
+  observes a later flip back to `false`, and an entry landed after such a flip
+  would look identical in this table. A real audit reads the setting from the
+  platform at review time, which is what V-P's gate-evidence step is for.
 - **No stale-CI counterexample is recorded here.** A queued entry whose build
   fails must be removed and the branch returned; that is a different experiment
   from this log and belongs to the N5a evidence set.
@@ -200,8 +206,8 @@ Entries are appended by a change that merges *after* the one being described,
 because a commit cannot contain its own merge SHAs. The table records every
 merge completed under this channel up to the change that wrote it; the merge
 that lands the newest entry is checked by the same procedure and becomes the next
-entry when one is added. Six consecutive entries show this is not a single-run
-accident: two merges under strict up-to-date and four through the queue. Every
+entry when one is added. Eight consecutive entries show this is not a single-run
+accident: two merges under strict up-to-date and six through the queue. Every
 merge after entry 1 went through this channel.
 
 | Entry | PR | Tested tree | Landed commit | Landed tree | Equal |
@@ -212,6 +218,8 @@ merge after entry 1 went through this channel.
 | 4 | #13 | `4f5322d81b0a7561cd6450f413dd88ce32fbeb4e` | `0d07288aabd5b38b4e155b2ef92c923cee8b3917` | `4f5322d81b0a7561cd6450f413dd88ce32fbeb4e` | yes |
 | 5 | #14 | `fdc104fb1cf48a08bc90c5cdde7e4fe476368540` | `b7096be31c05943a91809cd698b384414b3d0be5` | `fdc104fb1cf48a08bc90c5cdde7e4fe476368540` | yes |
 | 6 | #15 | `07d7889f743b8e167225c4ac338e100d1bf08a44` | `af26da9c422b5b48d47f8601ae1cb3e63aa71c42` | `07d7889f743b8e167225c4ac338e100d1bf08a44` | yes |
+| 7 | #16 | `dfc575396c8670161611b6688325ebac31cf831f` | `b6ea6887cb2dd293ad776787f5ba2f6e5ea77a95` | `dfc575396c8670161611b6688325ebac31cf831f` | yes |
+| 8 | #17 | `495b9e210f6b0c7f3229243fdbc5f29de8d0d2fb` | `5f97463a06c185f2a45da30233d2ca09374d8362` | `495b9e210f6b0c7f3229243fdbc5f29de8d0d2fb` | yes |
 
 ### Entry 1, PR #9
 
@@ -323,6 +331,52 @@ before.
 Entries 5 and 6 were both produced by ordinary changes after the queue had
 proven itself on entries 3 and 4.
 
+### Entry 7, PR #16 — the change that records entries 5 and 6
+
+- Base: `af26da9c422b5b48d47f8601ae1cb3e63aa71c42` (entry 6's landed commit).
+- Head: `d0bfb7edb5e69a566ccd798207a1f11b56b25d0f`, tree
+  `dfc575396c8670161611b6688325ebac31cf831f`.
+- Seven required checks green on the pull request, then queued with
+  `gh pr merge 16 --auto`.
+- `merge_group` runs on head `b6ea6887cb2dd293ad776787f5ba2f6e5ea77a95`:
+  `44907990149` (`gates`) and `44907990152` (`determinism`), both `success`.
+- The queue merged at 2026-11-21T13:21:14Z.
+- Landed commit `b6ea6887cb2dd293ad776787f5ba2f6e5ea77a95`, tree
+  `dfc575396c8670161611b6688325ebac31cf831f`, first parent
+  `af26da9c422b5b48d47f8601ae1cb3e63aa71c42`.
+
+`origin/main` is the `merge_group` head, so the strong form holds. This is the
+change that appended entries 5 and 6 to this table; it is itself an entry, and
+like every other entry it is recorded by a *later* change, not by this one.
+
+### Entry 8, PR #17 — first merge under the pinning policy
+
+- Base: `b6ea6887cb2dd293ad776787f5ba2f6e5ea77a95` (entry 7's landed commit).
+- Head: `b5852113466efd74bf646398cefa95e45375fde8`, tree
+  `495b9e210f6b0c7f3229243fdbc5f29de8d0d2fb`.
+- All seven required checks passed on the pull request — this is the first time
+  they ran with `sha_pinning_required` on (§8), so the gate logic that approved
+  this change is the pinned gate logic, and it is the first entry for which the
+  approving gate is also the gate pinned at review time.
+- `merge_group` runs on head `5f97463a06c185f2a45da30233d2ca09374d8362`:
+  `44909310038` (`gates`) and `44909309894` (`determinism`), both `success`.
+- The queue merged at 2026-11-21T13:38:09Z.
+- Landed commit `5f97463a06c185f2a45da30233d2ca09374d8362`, tree
+  `495b9e210f6b0c7f3229243fdbc5f29de8d0d2fb`, first parent
+  `b6ea6887cb2dd293ad776787f5ba2f6e5ea77a95`.
+
+`origin/main` is again exactly the `merge_group` head. Its tree equals the head
+tree and its single parent is the old base, so the queue's rebuild introduced no
+content change here; the landed object is still a different commit from the head,
+which is why the assertion is made on the queue's SHA and not on the head's.
+
+What the first entry under the pinning policy does **not** add: it does not show
+that the pinning policy cannot be turned off, nor that the pinned SHAs are the
+release the tags named at any later date. It shows only that with the flag on, a
+change whose workflows are pinned to full commits was gated and landed by the
+same queue. Reverting `sha_pinning_required` is an owner action this log cannot
+observe; §5's remaining gaps list it.
+
 ## 7. Merge queue after the organization transfer
 
 Later on 2026-11-20 the repository was transferred from `Mr-enthalpy/MonAsm` to
@@ -375,9 +429,9 @@ The enabled rule, verbatim:
    gates ran on *is* the commit on `main`, not merely one with the same tree.
 5. Cross-check `origin/main^{tree}` against `refs/pull/<n>/merge^{tree}`.
 
-The queued merges are entries 3 to 6; their values are recorded by the changes
-that follow them, as §6 explains. All four were groups of one entry, so the
-queue has still not been observed merging a combined group.
+The queued merges are entries 3 to 8; their values are recorded by the changes
+that follow them, as §6 explains. All six were groups of one entry, so the queue
+has still not been observed merging a combined group.
 
 ## 8. Gate-input provenance: commit pins and the pinning policy
 
