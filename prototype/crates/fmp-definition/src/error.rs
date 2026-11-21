@@ -75,6 +75,85 @@ pub enum BuildError {
     LegacyRowMismatch { form_id: String },
     /// The package's `target_identity` differs from its `legacy_source`'s.
     LegacyTargetMismatch { field: &'static str },
+    /// A recorded digest differs from the one recomputed from the same bytes
+    /// (§7, §8.2). It covers a spec entry naming a different package source and a
+    /// sealed bundle whose own identity no longer matches its contents.
+    DigestMismatch {
+        field: &'static str,
+        expected: String,
+        actual: String,
+    },
+    /// One `package_id` appears at two versions in a spec (§4).
+    VersionConflict {
+        package_id: String,
+        versions: Vec<String>,
+    },
+    /// A dependency edge is outside the closure, disagrees with the listed
+    /// digest, or forms a cycle (§4, §8).
+    DependencyMismatch {
+        package_id: String,
+        version: String,
+        reason: &'static str,
+    },
+    /// A spec reuses a standalone or frozen legacy definition name (§2.1, §8).
+    ReservedIdentity {
+        namespace: String,
+        version: String,
+        reason: &'static str,
+    },
+    /// A form's ISA family differs from the package target's `isa_family` (§4.2).
+    FormFamilyMismatch {
+        form_id: String,
+        family: String,
+        target: String,
+    },
+    /// A form's `requires_extensions` is outside the package's declared cover
+    /// (§4.1).
+    FormExtensionMismatch {
+        form_id: String,
+        package_id: String,
+        required: Vec<String>,
+        declared: Vec<String>,
+    },
+    /// An `fmp-def/0.1` bundle selects a different target set from a package's
+    /// declared cover, even when the package cover is a subset (§4.1).
+    H2ExactTarget {
+        package_id: String,
+        declared: Vec<String>,
+        selected: Vec<String>,
+    },
+    /// A package's structural target facts disagree with the bundle's (§4).
+    TargetMismatch {
+        package_id: String,
+        field: &'static str,
+    },
+    /// Two packages export the same `form_id` (§5).
+    OwnerConflict {
+        form_id: String,
+        first: String,
+        second: String,
+    },
+    /// A sealed bundle's `form_owners` is missing a row, repeats one, names an
+    /// absent form, or names a package outside `packages` (§8.2).
+    BundleOwnerIncomplete {
+        subject: String,
+        reason: &'static str,
+    },
+    /// An artifact file name does not equal its `bundle_id` (§8.2).
+    BundleFileMismatch {
+        artifact: &'static str,
+        expected: String,
+        actual: String,
+    },
+    /// Two live specs share a `bundle_id` (§8).
+    BundleIdConflict { bundle_id: String },
+    /// Two live specs share a `(namespace, version)` (§8).
+    DefinitionIdentityConflict { namespace: String, version: String },
+    /// The per-closure byte budget of §12.2 was crossed.
+    AggregateLimit { limit: u64 },
+    /// `fmp_model::definition::read` refused a document the builder generated
+    /// (§9). The underlying diagnostic text is preserved.
+    DefinitionRejected { detail: String },
     /// A file could not be opened or read. Exit 2: the content may be valid.
     Io { path: String, detail: String },
 }
@@ -102,6 +181,21 @@ impl BuildError {
             BuildError::CaseEvidenceMismatch { .. } => "case-evidence-mismatch",
             BuildError::LegacyRowMismatch { .. } => "legacy-row-mismatch",
             BuildError::LegacyTargetMismatch { .. } => "legacy-target-mismatch",
+            BuildError::DigestMismatch { .. } => "digest-mismatch",
+            BuildError::VersionConflict { .. } => "version-conflict",
+            BuildError::DependencyMismatch { .. } => "dependency-mismatch",
+            BuildError::ReservedIdentity { .. } => "reserved-identity",
+            BuildError::FormFamilyMismatch { .. } => "form-family-mismatch",
+            BuildError::FormExtensionMismatch { .. } => "form-extension-mismatch",
+            BuildError::H2ExactTarget { .. } => "h2-exact-target",
+            BuildError::TargetMismatch { .. } => "target-mismatch",
+            BuildError::OwnerConflict { .. } => "owner-conflict",
+            BuildError::BundleOwnerIncomplete { .. } => "bundle-owner-incomplete",
+            BuildError::BundleFileMismatch { .. } => "bundle-file-mismatch",
+            BuildError::BundleIdConflict { .. } => "bundle-id-conflict",
+            BuildError::DefinitionIdentityConflict { .. } => "definition-identity-conflict",
+            BuildError::AggregateLimit { .. } => "aggregate-limit",
+            BuildError::DefinitionRejected { .. } => "definition-rejected",
             BuildError::Io { .. } => "host-io",
         }
     }
@@ -200,6 +294,100 @@ impl fmt::Display for BuildError {
             BuildError::LegacyTargetMismatch { field } => {
                 write!(formatter, "target_identity.{field} differs from legacy_source")
             }
+            BuildError::DigestMismatch {
+                field,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "{field} records {expected:?}, but the same bytes recompute to {actual:?}"
+            ),
+            BuildError::VersionConflict {
+                package_id,
+                versions,
+            } => write!(
+                formatter,
+                "package_id {package_id:?} is listed at versions {versions:?}; at most one version may appear"
+            ),
+            BuildError::DependencyMismatch {
+                package_id,
+                version,
+                reason,
+            } => write!(formatter, "dependency {package_id}:{version}: {reason}"),
+            BuildError::ReservedIdentity {
+                namespace,
+                version,
+                reason,
+            } => write!(
+                formatter,
+                "definition identity ({namespace:?}, {version:?}) is reserved: {reason}"
+            ),
+            BuildError::FormFamilyMismatch {
+                form_id,
+                family,
+                target,
+            } => write!(
+                formatter,
+                "form {form_id:?} has ISA family {family:?}, but the package target is {target:?}"
+            ),
+            BuildError::FormExtensionMismatch {
+                form_id,
+                package_id,
+                required,
+                declared,
+            } => write!(
+                formatter,
+                "form {form_id:?} of package {package_id:?} requires {required:?}, outside the declared cover {declared:?}"
+            ),
+            BuildError::H2ExactTarget {
+                package_id,
+                declared,
+                selected,
+            } => write!(
+                formatter,
+                "package {package_id:?} declares {declared:?}, but an fmp-def/0.1 bundle must select exactly that set, not {selected:?}"
+            ),
+            BuildError::TargetMismatch { package_id, field } => write!(
+                formatter,
+                "package {package_id:?} disagrees with the bundle on {field}"
+            ),
+            BuildError::OwnerConflict {
+                form_id,
+                first,
+                second,
+            } => write!(
+                formatter,
+                "form {form_id:?} is exported by both {first:?} and {second:?}"
+            ),
+            BuildError::BundleOwnerIncomplete { subject, reason } => {
+                write!(formatter, "form_owners {subject}: {reason}")
+            }
+            BuildError::BundleFileMismatch {
+                artifact,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "{artifact} file name {actual:?} does not match bundle_id ({expected:?})"
+            ),
+            BuildError::BundleIdConflict { bundle_id } => write!(
+                formatter,
+                "two live specs share bundle_id {bundle_id:?}"
+            ),
+            BuildError::DefinitionIdentityConflict {
+                namespace,
+                version,
+            } => write!(
+                formatter,
+                "two specs share definition identity ({namespace:?}, {version:?})"
+            ),
+            BuildError::AggregateLimit { limit } => {
+                write!(formatter, "package-root bytes exceed the closure limit of {limit}")
+            }
+            BuildError::DefinitionRejected { detail } => write!(
+                formatter,
+                "fmp_model::definition::read rejected the generated document: {detail}"
+            ),
             BuildError::Io { path, detail } => write!(formatter, "{path:?}: {detail}"),
         }
     }
