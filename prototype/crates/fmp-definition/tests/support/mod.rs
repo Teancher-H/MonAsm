@@ -40,6 +40,17 @@ pub struct ManifestFixture {
     pub legacy: Option<(String, String)>,
     pub dependencies: Vec<(String, String, String)>,
     pub include_reserved_assets: bool,
+    /// The package's declared target. The family is not a whitelist: a test may
+    /// set `loongarch` to show the family rule is equality.
+    pub isa_family: String,
+    pub isa_variant: String,
+    pub execution_mode: String,
+    pub byte_order: String,
+    pub address_width: i128,
+    /// A descriptive label; never compared with the spec's `profile_id`.
+    pub target_profile: String,
+    /// The `packages/<target>/...` directory segment.
+    pub target_dir: String,
 }
 
 impl Default for ManifestFixture {
@@ -63,6 +74,13 @@ impl Default for ManifestFixture {
             legacy: Some(("x86_64".to_string(), "0.1.0".to_string())),
             dependencies: Vec::new(),
             include_reserved_assets: true,
+            isa_family: "x86".to_string(),
+            isa_variant: "x86-64".to_string(),
+            execution_mode: "64".to_string(),
+            byte_order: "little".to_string(),
+            address_width: 64,
+            target_profile: "monasm.target.x86_64".to_string(),
+            target_dir: "x86_64".to_string(),
         }
     }
 }
@@ -132,8 +150,8 @@ impl ManifestFixture {
             (
                 "target_identity".to_string(),
                 Json::Object(vec![
-                    ("address_width".to_string(), Json::Int(64)),
-                    ("byte_order".to_string(), Json::Str("little".to_string())),
+                    ("address_width".to_string(), Json::Int(self.address_width)),
+                    ("byte_order".to_string(), Json::Str(self.byte_order.clone())),
                     (
                         "enabled_extensions".to_string(),
                         Json::Array(
@@ -143,14 +161,20 @@ impl ManifestFixture {
                                 .collect(),
                         ),
                     ),
-                    ("execution_mode".to_string(), Json::Str("64".to_string())),
-                    ("isa_family".to_string(), Json::Str("x86".to_string())),
-                    ("isa_variant".to_string(), Json::Str("x86-64".to_string())),
+                    (
+                        "execution_mode".to_string(),
+                        Json::Str(self.execution_mode.clone()),
+                    ),
+                    ("isa_family".to_string(), Json::Str(self.isa_family.clone())),
+                    (
+                        "isa_variant".to_string(),
+                        Json::Str(self.isa_variant.clone()),
+                    ),
                 ]),
             ),
             (
                 "target_profile".to_string(),
-                Json::Str("monasm.target.x86_64".to_string()),
+                Json::Str(self.target_profile.clone()),
             ),
             ("version".to_string(), Json::Str(self.version.clone())),
         ];
@@ -245,7 +269,10 @@ pub fn row_for(id: &str) -> &'static str {
 /// swap) mutate the parsed value and write it back, so the rest of the document
 /// stays byte-identical to the fixture.
 pub fn write_package_value(tree: &TempTree, fixture: &ManifestFixture, value: &Json) -> String {
-    let relative = format!("packages/x86_64/{}/{}", fixture.package_id, fixture.version);
+    let relative = format!(
+        "packages/{}/{}/{}",
+        fixture.target_dir, fixture.package_id, fixture.version
+    );
     tree.write(&format!("{relative}/package.json"), &canonical_bytes(value));
     for (id, path) in &fixture.forms {
         tree.write(&format!("{relative}/{path}"), row_for(id).as_bytes());
@@ -298,4 +325,326 @@ pub fn evidence_manifest(files: &[(String, String)], oracle_status: &str) -> Str
 /// A Rust-escaped literal is a JSON string for the ASCII in these fixtures.
 fn quote(value: &str) -> String {
     format!("{value:?}")
+}
+
+/// `tests/cases.json` with no cases: a release-shaped file, not a coverage claim.
+pub const DEFAULT_CASES: &str = "{\"cases\":[],\"cases_format\":\"monasm-cases/0.1\"}\n";
+/// A `NOTICE` whose bytes are what the evidence manifest records.
+pub const DEFAULT_NOTICE: &str = "MonAsm example package. SPDX-License-Identifier: Apache-2.0\n";
+
+/// Write a release-ready package: manifest, rows, `NOTICE`, `tests/cases.json`
+/// and an evidence manifest that lists and hashes all three.
+pub fn write_release_package(tree: &TempTree, fixture: &ManifestFixture) -> String {
+    write_release_package_with(tree, fixture, DEFAULT_CASES.as_bytes(), &[])
+}
+
+/// [`write_release_package`] with caller-supplied case bytes and extra evidence.
+///
+/// `extra` entries are written under the package and added to the evidence
+/// manifest, so a test can change an evidence file and update its hash without
+/// touching the form rows.
+pub fn write_release_package_with(
+    tree: &TempTree,
+    fixture: &ManifestFixture,
+    cases: &[u8],
+    extra: &[(&str, &[u8])],
+) -> String {
+    let relative = write_package(tree, fixture);
+    write_release_evidence(tree, &relative, cases, extra);
+    relative
+}
+
+/// [`write_release_package_with`] with a manifest value that is not
+/// `fixture.json()`, so one field can differ while the rest stays byte-identical.
+pub fn write_release_package_value(
+    tree: &TempTree,
+    fixture: &ManifestFixture,
+    value: &Json,
+    cases: &[u8],
+    extra: &[(&str, &[u8])],
+) -> String {
+    let relative = write_package_value(tree, fixture, value);
+    write_release_evidence(tree, &relative, cases, extra);
+    relative
+}
+
+fn write_release_evidence(tree: &TempTree, relative: &str, cases: &[u8], extra: &[(&str, &[u8])]) {
+    let notice = DEFAULT_NOTICE.as_bytes();
+    tree.write(&format!("{relative}/NOTICE"), notice);
+    tree.write(&format!("{relative}/tests/cases.json"), cases);
+    for (path, bytes) in extra {
+        tree.write(&format!("{relative}/{path}"), bytes);
+    }
+    let mut files = vec![
+        ("NOTICE".to_string(), raw_sha256(notice)),
+        ("tests/cases.json".to_string(), raw_sha256(cases)),
+    ];
+    for (path, bytes) in extra {
+        files.push(((*path).to_string(), raw_sha256(bytes)));
+    }
+    let manifest = evidence_manifest(&files, "manual-derivation");
+    tree.write(
+        &format!("{relative}/evidence/manifest.json"),
+        manifest.as_bytes(),
+    );
+}
+
+/// The repository-relative path a [`ManifestFixture`] is written to.
+pub fn package_relative(fixture: &ManifestFixture) -> String {
+    format!(
+        "packages/{}/{}/{}",
+        fixture.target_dir, fixture.package_id, fixture.version
+    )
+}
+
+/// Load an already-written package and read its `source_package_digest`.
+pub fn package_digest(tree: &TempTree, fixture: &ManifestFixture) -> String {
+    let relative = package_relative(fixture);
+    let package = fmp_definition::LoadedPackage::load(tree.root(), &relative)
+        .unwrap_or_else(|error| panic!("load {relative}: {error}"));
+    package.source_package_digest().to_string()
+}
+
+/// One `packages[]` entry of a spec.
+#[derive(Clone, Debug)]
+pub struct SpecEntryFixture {
+    pub package_id: String,
+    pub version: String,
+    pub path: String,
+    pub source_package_digest: String,
+}
+
+impl SpecEntryFixture {
+    pub fn new(
+        package_id: impl Into<String>,
+        version: impl Into<String>,
+        path: impl Into<String>,
+        source_package_digest: impl Into<String>,
+    ) -> SpecEntryFixture {
+        SpecEntryFixture {
+            package_id: package_id.into(),
+            version: version.into(),
+            path: path.into(),
+            source_package_digest: source_package_digest.into(),
+        }
+    }
+
+    /// The entry for a package that is already written and release-shaped.
+    pub fn of(tree: &TempTree, fixture: &ManifestFixture) -> SpecEntryFixture {
+        SpecEntryFixture {
+            package_id: fixture.package_id.clone(),
+            version: fixture.version.clone(),
+            path: package_relative(fixture),
+            source_package_digest: package_digest(tree, fixture),
+        }
+    }
+}
+
+/// A canonical `monasm-bundle-spec/0.1` fixture.
+#[derive(Clone, Debug)]
+pub struct SpecFixture {
+    pub bundle_id: String,
+    pub profile_id: String,
+    pub namespace: String,
+    pub version: String,
+    pub definition_format: String,
+    pub isa_family: String,
+    pub isa_variant: String,
+    pub execution_mode: String,
+    pub byte_order: String,
+    pub address_width: i128,
+    pub extensions: Vec<String>,
+    pub packages: Vec<SpecEntryFixture>,
+}
+
+impl SpecFixture {
+    pub fn for_packages(packages: Vec<SpecEntryFixture>) -> SpecFixture {
+        SpecFixture {
+            bundle_id: "monasm.bundle.x86.h2".to_string(),
+            profile_id: "monasm.target.x86_64".to_string(),
+            namespace: "monasm.isa.x86".to_string(),
+            version: "0.1.0-h2".to_string(),
+            definition_format: "fmp-def/0.1".to_string(),
+            isa_family: "x86".to_string(),
+            isa_variant: "x86-64".to_string(),
+            execution_mode: "64".to_string(),
+            byte_order: "little".to_string(),
+            address_width: 64,
+            extensions: Vec::new(),
+            packages,
+        }
+    }
+
+    pub fn json(&self) -> Json {
+        let packages = self
+            .packages
+            .iter()
+            .map(|entry| {
+                Json::Object(vec![
+                    (
+                        "package_id".to_string(),
+                        Json::Str(entry.package_id.clone()),
+                    ),
+                    ("path".to_string(), Json::Str(entry.path.clone())),
+                    (
+                        "source_package_digest".to_string(),
+                        Json::Str(entry.source_package_digest.clone()),
+                    ),
+                    ("version".to_string(), Json::Str(entry.version.clone())),
+                ])
+            })
+            .collect();
+        Json::Object(vec![
+            (
+                "bundle_format".to_string(),
+                Json::Str("monasm-bundle-spec/0.1".to_string()),
+            ),
+            ("bundle_id".to_string(), Json::Str(self.bundle_id.clone())),
+            (
+                "definition_format".to_string(),
+                Json::Str(self.definition_format.clone()),
+            ),
+            ("namespace".to_string(), Json::Str(self.namespace.clone())),
+            ("packages".to_string(), Json::Array(packages)),
+            (
+                "target".to_string(),
+                Json::Object(vec![
+                    (
+                        "identity".to_string(),
+                        Json::Object(vec![
+                            ("address_width".to_string(), Json::Int(self.address_width)),
+                            ("byte_order".to_string(), Json::Str(self.byte_order.clone())),
+                            (
+                                "enabled_extensions".to_string(),
+                                Json::Array(
+                                    self.extensions
+                                        .iter()
+                                        .map(|name| Json::Str(name.clone()))
+                                        .collect(),
+                                ),
+                            ),
+                            (
+                                "execution_mode".to_string(),
+                                Json::Str(self.execution_mode.clone()),
+                            ),
+                            ("isa_family".to_string(), Json::Str(self.isa_family.clone())),
+                            (
+                                "isa_variant".to_string(),
+                                Json::Str(self.isa_variant.clone()),
+                            ),
+                        ]),
+                    ),
+                    ("profile_id".to_string(), Json::Str(self.profile_id.clone())),
+                ]),
+            ),
+            ("version".to_string(), Json::Str(self.version.clone())),
+        ])
+    }
+
+    /// Write the spec at `bundles/specs/<bundle_id>.json` and return the path.
+    pub fn write(&self, tree: &TempTree) -> String {
+        let relative = format!("bundles/specs/{}.json", self.bundle_id);
+        tree.write(&relative, &canonical_bytes(&self.json()));
+        relative
+    }
+}
+
+/// Replace an object member, keeping every other member byte-identical.
+pub fn json_set(value: &Json, field: &str, replacement: Json) -> Json {
+    match value {
+        Json::Object(entries) => Json::Object(
+            entries
+                .iter()
+                .map(|(name, value)| {
+                    if name == field {
+                        (name.clone(), replacement.clone())
+                    } else {
+                        (name.clone(), value.clone())
+                    }
+                })
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+/// Remove an object member.
+pub fn json_without(value: &Json, field: &str) -> Json {
+    match value {
+        Json::Object(entries) => Json::Object(
+            entries
+                .iter()
+                .filter(|(name, _)| name != field)
+                .cloned()
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+/// A package fixture with an explicit identity, export list and capability set.
+///
+/// The capability set must equal what the rows derive (§1.2), so a caller that
+/// picks a row with an `operand_value` slot passes `integer-domain/v1` too.
+pub fn package_with(
+    package_id: &str,
+    forms: &[(&str, &str)],
+    capabilities: &[&str],
+) -> ManifestFixture {
+    ManifestFixture {
+        package_id: package_id.to_string(),
+        forms: forms
+            .iter()
+            .map(|(id, path)| ((*id).to_string(), (*path).to_string()))
+            .collect(),
+        capabilities: capabilities
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect(),
+        legacy: None,
+        ..ManifestFixture::default()
+    }
+}
+
+/// One `packages[]` entry as it appears for a bad-digest test.
+pub fn entry_with_dummy_digest(package_id: &str, version: &str, path: &str) -> SpecEntryFixture {
+    SpecEntryFixture::new(
+        package_id,
+        version,
+        path,
+        format!("sha256:{}", "0".repeat(64)),
+    )
+}
+
+/// The canonical bytes of a spec fixture.
+pub fn spec_bytes(spec: &SpecFixture) -> Vec<u8> {
+    canonical_bytes(&spec.json())
+}
+
+/// Parse a spec fixture without writing it, so a rejection is the document's.
+pub fn parse_spec(spec: &SpecFixture) -> Result<fmp_definition::Spec, fmp_definition::BuildError> {
+    fmp_definition::Spec::parse(&spec_bytes(spec))
+}
+
+/// Parse and build a bundle from a fixture, with the default builder identity.
+pub fn build_bundle(
+    tree: &TempTree,
+    spec: &SpecFixture,
+) -> Result<fmp_definition::CheckedBundle, fmp_definition::BuildError> {
+    let spec = parse_spec(spec)?;
+    fmp_definition::CheckedBundle::build(tree.root(), &spec, fmp_definition::Builder::default())
+}
+
+/// The same, for tests whose fixture must build.
+pub fn checked(tree: &TempTree, spec: &SpecFixture) -> fmp_definition::CheckedBundle {
+    build_bundle(tree, spec).unwrap_or_else(|error| panic!("build bundle: {error}"))
+}
+
+/// Overwrite one declared form asset after the package was written.
+///
+/// The source digest is computed later, so a row changed here is the row the
+/// digest names; the evidence manifest never lists form assets.
+pub fn overwrite_row(tree: &TempTree, fixture: &ManifestFixture, path: &str, value: &Json) {
+    let relative = package_relative(fixture);
+    tree.write(&format!("{relative}/{path}"), &canonical_bytes(value));
 }

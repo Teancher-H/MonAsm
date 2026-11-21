@@ -20,7 +20,7 @@ use std::path::Path;
 use fmp_model::canonical::{canonical_bytes, sha256};
 use fmp_model::json::{self, Json};
 
-use crate::budget::{self, Counter};
+use crate::budget::{self, ClosureCounter, Counter};
 use crate::digest::{self, Asset, AssetKind};
 use crate::error::BuildError;
 use crate::evidence::EvidenceManifest;
@@ -58,26 +58,36 @@ struct Components<'a> {
 
 impl<'a> Components<'a> {
     fn parse(relative: &'a str) -> Result<Components<'a>, BuildError> {
-        if let Err(fault) = crate::lexical::path(relative) {
-            return Err(BuildError::PathLexical {
-                field: "packages[].path",
-                value: relative.to_string(),
-                reason: fault.reason(),
-            });
-        }
-        let segments: Vec<&str> = relative.split('/').collect();
-        if segments.len() != 4 || segments[0] != "packages" {
-            return Err(BuildError::PathLexical {
-                field: "packages[].path",
-                value: relative.to_string(),
-                reason: "a package path is packages/<target>/<package_id>/<version>",
-            });
-        }
+        let (package_id, version) = repository_components(relative)?;
         Ok(Components {
-            package_id: segments[2],
-            version: segments[3],
+            package_id,
+            version,
         })
     }
+}
+
+/// Split a repository-relative package path into its declared identity.
+///
+/// The only legal shape is `packages/<target>/<package_id>/<version>`. The
+/// `<target>` segment is a directory label and is not compared with the
+/// manifest; `package_id` and `version` are compared by the caller.
+pub(crate) fn repository_components(relative: &str) -> Result<(&str, &str), BuildError> {
+    if let Err(fault) = crate::lexical::path(relative) {
+        return Err(BuildError::PathLexical {
+            field: "packages[].path",
+            value: relative.to_string(),
+            reason: fault.reason(),
+        });
+    }
+    let segments: Vec<&str> = relative.split('/').collect();
+    if segments.len() != 4 || segments[0] != "packages" {
+        return Err(BuildError::PathLexical {
+            field: "packages[].path",
+            value: relative.to_string(),
+            reason: "a package path is packages/<target>/<package_id>/<version>",
+        });
+    }
+    Ok((segments[2], segments[3]))
 }
 
 /// A package as loaded: one read per file, one digest per read.
@@ -92,23 +102,40 @@ pub struct LoadedPackage {
 }
 
 impl LoadedPackage {
-    /// Read a package from `<root>/<relative>`.
+    /// Read a package from `<root>/<relative>` with a fresh closure counter.
+    ///
+    /// `verify --package` has no closure, so this is the one-package entry. A
+    /// closure command uses [`LoadedPackage::load_counted`] and shares one
+    /// counter across every selected package (§12.2).
+    pub fn load(root: &Path, relative: &str) -> Result<LoadedPackage, BuildError> {
+        let mut closure = ClosureCounter::new();
+        Self::load_counted(root, relative, &mut closure)
+    }
+
+    /// Read a package from `<root>/<relative>`, charging the closure counter.
     ///
     /// Order follows §12: lexical validation of the declared path, then the open
     /// and the type check on the opened handle, then the bounded read, then the
     /// parse. Nothing is opened that the manifest did not declare — the package
     /// root is not scanned.
-    pub fn load(root: &Path, relative: &str) -> Result<LoadedPackage, BuildError> {
+    pub fn load_counted(
+        root: &Path,
+        relative: &str,
+        closure: &mut ClosureCounter,
+    ) -> Result<LoadedPackage, BuildError> {
         let components = Components::parse(relative)?;
         budget::check_path_length("packages[].path", relative)?;
         let directory = root.join(relative);
 
         let mut counter = Counter::package();
-        let manifest_bytes = budget::read_regular(
+        let manifest_bytes = budget::read_regular_tracked(
             &directory.join("package.json"),
             budget::MANIFEST_BYTES,
             "manifest bytes",
             &mut counter,
+            closure,
+            relative,
+            "package.json",
         )?;
         let manifest = Manifest::parse(&manifest_bytes)?;
 
@@ -132,15 +159,54 @@ impl LoadedPackage {
             });
         }
 
+        // §4.2: the family check is on the declared ID and runs before any asset
+        // is opened, so an ISA-mismatched package never reaches a merge. The
+        // rule is equality with the declared family, not a package whitelist.
+        for declared in manifest.forms() {
+            let family = declared
+                .id
+                .split_once(':')
+                .map(|(family, _)| family)
+                .unwrap_or(declared.id.as_str());
+            if family != manifest.target().isa_family {
+                return Err(BuildError::FormFamilyMismatch {
+                    form_id: declared.id.clone(),
+                    family: family.to_string(),
+                    target: manifest.target().isa_family.clone(),
+                });
+            }
+        }
+
         let mut forms = Vec::with_capacity(manifest.forms().len());
         for declared in manifest.forms() {
             let path = directory.join(&declared.path);
-            let bytes =
-                budget::read_regular(&path, budget::ASSET_BYTES, "form asset bytes", &mut counter)?;
+            let bytes = budget::read_regular_tracked(
+                &path,
+                budget::ASSET_BYTES,
+                "form asset bytes",
+                &mut counter,
+                closure,
+                relative,
+                &declared.path,
+            )?;
             budget::check_depth(&bytes)?;
             let value = json::parse(&bytes).map_err(|error| {
                 BuildError::shape("form asset", declared.path.clone(), error.reason())
             })?;
+            // The file's own ID is the ownership fact; the declaration is only a
+            // claim about it. Swapping two files may keep both declarations
+            // unchanged, so this comparison is what notices (§1, §5).
+            let actual = value.get("form_id").and_then(Json::as_str);
+            if actual != Some(declared.id.as_str()) {
+                return Err(BuildError::shape(
+                    "form asset",
+                    declared.path.clone(),
+                    format!(
+                        "form_id {actual:?} differs from the declared export {:?}",
+                        declared.id
+                    ),
+                ));
+            }
             let digest = digest::asset_digest(&value);
             forms.push(LoadedForm {
                 declared: declared.clone(),
@@ -165,7 +231,7 @@ impl LoadedPackage {
             .collect();
         let source_package_digest = digest::source_package_digest(manifest.canonical(), &assets);
 
-        let (evidence, cases) = load_evidence(&directory)?;
+        let (evidence, cases) = load_evidence(&directory, relative, closure)?;
 
         Ok(LoadedPackage {
             relative: relative.to_string(),
@@ -297,29 +363,55 @@ impl LoadedPackage {
 /// same hash (`ADR-0128` §7.1). The cases bytes are kept because the release
 /// check has to consume the same bytes that were verified, not a second read of
 /// the same path.
+///
+/// `tests/cases.json` is charged to its own counter, not the evidence counter.
+/// §12.2's counterexample requires 12 MiB of cases plus 12 MiB of evidence in one
+/// package to stay inside every per-package limit; the closure counter is what
+/// bounds their sum.
 fn load_evidence(
     directory: &Path,
+    root: &str,
+    closure: &mut ClosureCounter,
 ) -> Result<(Option<EvidenceManifest>, Option<Vec<u8>>), BuildError> {
     let mut counter = Counter::evidence();
-    let bytes = budget::read_optional(
+    let bytes = budget::read_optional_tracked(
         &directory.join("evidence").join("manifest.json"),
         budget::EVIDENCE_MANIFEST_BYTES,
         "evidence manifest bytes",
         &mut counter,
+        closure,
+        root,
+        "evidence/manifest.json",
     )?;
     let Some(bytes) = bytes else {
         return Ok((None, None));
     };
     let manifest = EvidenceManifest::parse(&bytes)?;
     let mut cases = None;
+    let mut cases_counter = Counter::cases();
     for file in manifest.files() {
         let path = directory.join(&file.path);
-        let bytes = budget::read_optional(
-            &path,
-            budget::EVIDENCE_BYTES,
-            "evidence file bytes",
-            &mut counter,
-        )?
+        let bytes = if file.path == "tests/cases.json" {
+            budget::read_optional_tracked(
+                &path,
+                budget::CASES_BYTES,
+                "case file bytes",
+                &mut cases_counter,
+                closure,
+                root,
+                &file.path,
+            )?
+        } else {
+            budget::read_optional_tracked(
+                &path,
+                budget::EVIDENCE_BYTES,
+                "evidence file bytes",
+                &mut counter,
+                closure,
+                root,
+                &file.path,
+            )?
+        }
         .ok_or_else(|| BuildError::EvidenceMismatch {
             path: file.path.clone(),
             reason: "a listed file is missing",

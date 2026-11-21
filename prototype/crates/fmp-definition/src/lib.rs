@@ -1,4 +1,5 @@
-//! The target-package author layer: read a package, check it, and name it.
+//! The target-package author layer and the bundle builder: read a package, name
+//! it, then read a declared closure and seal its identity.
 //!
 //! The contract is `docs/adr/0128-package-and-bundle-contract.md` (referred to
 //! below as "the ADR"). This crate is the development-time builder; it is never
@@ -7,11 +8,16 @@
 //!
 //! ## What this layer is
 //!
-//! H2a is the *author layer*: one package directory, read once, checked against
-//! its own declaration, and given its own digests. It makes no publication claim
-//! — no lock, sealed bundle, registry or merge-authority fact is established by
-//! anything here, and the ADR's second verdict (the publication channel) is not
-//! implied by this crate passing its tests.
+//! N1a is the *author layer*: one package directory, read once, checked against
+//! its own declaration, and given its own digests. N2 adds the *closure*: the
+//! spec lists every package, the builder opens exactly those paths once, checks
+//! ownership and the target cover, reads each package under its own target, and
+//! merges the rows into a definition that `fmp_model::definition::read` judges.
+//!
+//! A [`CheckedBundle`] is not a publication claim: no lock, sealed bundle,
+//! registry or merge-authority fact is established by publishing a file, and the
+//! ADR's second verdict (the publication channel) is not implied by this crate
+//! passing its tests.
 //!
 //! ## The one loaded package
 //!
@@ -45,21 +51,33 @@
 //!   rejection; §11 lists it only as "manifest shape (required/optional keys)".
 //! - `definition-rejected` — `fmp_model::definition::read` refused the document
 //!   the builder generated, re-raised with the underlying text preserved
-//!   (ADR §9). Used from the merge onward, not in this node.
+//!   (ADR §9). Used from the merge onward.
 //!
 //! Both are additions to the vocabulary, not to the semantics: nothing that the
 //! ADR accepts becomes rejected, and nothing it rejects becomes accepted.
 
 #![forbid(unsafe_code)]
 
+pub mod artifact;
 pub mod budget;
+pub mod build;
+pub mod closure;
+pub mod compat;
 pub mod digest;
 pub mod error;
 pub mod evidence;
 pub mod lexical;
+pub mod lock;
 pub mod manifest;
 pub mod package;
+pub mod sealed;
+pub mod spec;
 
+pub use build::{Builder, CheckedBundle};
+pub use closure::Closure;
 pub use error::BuildError;
+pub use lock::Lock;
 pub use manifest::Manifest;
 pub use package::LoadedPackage;
+pub use sealed::SealedBundle;
+pub use spec::Spec;

@@ -74,6 +74,61 @@ pub struct TargetIdentity {
     pub address_width: u32,
 }
 
+impl TargetIdentity {
+    /// The six-key identity as a definition/spec `target_identity` value.
+    ///
+    /// The same function writes the package document, the merged document and
+    /// the bundle metadata, so the identity has one spelling in every artifact.
+    pub fn to_json(&self) -> Json {
+        Json::Object(vec![
+            (
+                "address_width".to_string(),
+                Json::Int(self.address_width as i128),
+            ),
+            ("byte_order".to_string(), Json::Str(self.byte_order.clone())),
+            (
+                "enabled_extensions".to_string(),
+                Json::Array(
+                    self.enabled_extensions
+                        .iter()
+                        .map(|name| Json::Str(name.clone()))
+                        .collect(),
+                ),
+            ),
+            (
+                "execution_mode".to_string(),
+                Json::Str(self.execution_mode.clone()),
+            ),
+            ("isa_family".to_string(), Json::Str(self.isa_family.clone())),
+            (
+                "isa_variant".to_string(),
+                Json::Str(self.isa_variant.clone()),
+            ),
+        ])
+    }
+
+    /// The five structural fields are equal; `enabled_extensions` is compared by
+    /// the caller because a package declares a cover, not the bundle selection.
+    pub fn same_structure(&self, other: &TargetIdentity) -> Option<&'static str> {
+        if self.isa_family != other.isa_family {
+            return Some("isa_family");
+        }
+        if self.isa_variant != other.isa_variant {
+            return Some("isa_variant");
+        }
+        if self.execution_mode != other.execution_mode {
+            return Some("execution_mode");
+        }
+        if self.byte_order != other.byte_order {
+            return Some("byte_order");
+        }
+        if self.address_width != other.address_width {
+            return Some("address_width");
+        }
+        None
+    }
+}
+
 /// Migration provenance: which pinned legacy definition the rows came from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LegacySource {
@@ -476,23 +531,35 @@ fn capability_declaration(value: &Json, path: String) -> Result<Vec<String>, Bui
 }
 
 fn target_identity(value: &Json, path: String) -> Result<TargetIdentity, BuildError> {
-    let object = Obj::new(path, "target_identity", value).map_err(manifest_shape)?;
-    object.closed(TARGET_FIELDS).map_err(manifest_shape)?;
-    let isa_family = field_string(&object, "isa_family")?;
-    let isa_variant = field_string(&object, "isa_variant")?;
-    let execution_mode = field_string(&object, "execution_mode")?;
-    let byte_order = field_string(&object, "byte_order")?;
-    let (address_width, address_path) = object.required("address_width").map_err(manifest_shape)?;
+    parse_target_identity(value, path, "package.json")
+}
+
+/// The six-key identity parser shared by the manifest, the spec and an artifact.
+///
+/// The shape is the same in all three documents; only the document name in a
+/// rejection differs. The values are data: no ISA family or extension is
+/// whitelisted here.
+pub(crate) fn parse_target_identity(
+    value: &Json,
+    path: String,
+    document: &'static str,
+) -> Result<TargetIdentity, BuildError> {
+    let shape = |fault: Fault| target_shape(document, fault);
+    let object = Obj::new(path, "target_identity", value).map_err(shape)?;
+    object.closed(TARGET_FIELDS).map_err(shape)?;
+    let isa_family = field_string_in(&object, "isa_family", document)?;
+    let isa_variant = field_string_in(&object, "isa_variant", document)?;
+    let execution_mode = field_string_in(&object, "execution_mode", document)?;
+    let byte_order = field_string_in(&object, "byte_order", document)?;
+    let (address_width, address_path) = object.required("address_width").map_err(shape)?;
     let address_width =
-        bind::bounded_u32(address_width, address_path, u32::MAX, "u32").map_err(manifest_shape)?;
-    let (extensions, extensions_path) = object
-        .required("enabled_extensions")
-        .map_err(manifest_shape)?;
-    let items = bind::array(extensions, extensions_path.clone()).map_err(manifest_shape)?;
+        bind::bounded_u32(address_width, address_path, u32::MAX, "u32").map_err(shape)?;
+    let (extensions, extensions_path) = object.required("enabled_extensions").map_err(shape)?;
+    let items = bind::array(extensions, extensions_path.clone()).map_err(shape)?;
     let mut enabled_extensions = Vec::with_capacity(items.len());
     for (index, item) in items.iter().enumerate() {
         let item_path = bind::pointer_index(&extensions_path, index);
-        enabled_extensions.push(bind::owned_string(item, item_path).map_err(manifest_shape)?);
+        enabled_extensions.push(bind::owned_string(item, item_path).map_err(shape)?);
     }
     if !crate::lexical::strictly_increasing(&enabled_extensions) {
         return Err(BuildError::ExtensionLexical {
@@ -507,6 +574,20 @@ fn target_identity(value: &Json, path: String) -> Result<TargetIdentity, BuildEr
         byte_order,
         address_width,
     })
+}
+
+fn target_shape(document: &'static str, fault: Fault) -> BuildError {
+    let reason = match &fault {
+        Fault::Missing { field, object, .. } => format!("{object} is missing `{field}`"),
+        Fault::Unknown { field, object, .. } => format!("{object} has unknown field `{field}`"),
+        Fault::Type {
+            expected, found, ..
+        } => format!("expected {expected}, found {found}"),
+        Fault::Domain {
+            required, found, ..
+        } => format!("expected {required}, found {found}"),
+    };
+    BuildError::shape(document, fault.path(), reason)
 }
 
 fn legacy_source(value: &Json, path: String) -> Result<LegacySource, BuildError> {
@@ -532,8 +613,17 @@ fn legacy_source(value: &Json, path: String) -> Result<LegacySource, BuildError>
 }
 
 fn field_string(object: &Obj<'_>, field: &'static str) -> Result<String, BuildError> {
-    let (value, path) = object.required(field).map_err(manifest_shape)?;
-    bind::owned_string(value, path).map_err(manifest_shape)
+    field_string_in(object, field, "package.json")
+}
+
+fn field_string_in(
+    object: &Obj<'_>,
+    field: &'static str,
+    document: &'static str,
+) -> Result<String, BuildError> {
+    let shape = |fault: Fault| target_shape(document, fault);
+    let (value, path) = object.required(field).map_err(shape)?;
+    bind::owned_string(value, path).map_err(shape)
 }
 
 fn identifier(value: &Json, path: String, field: &'static str) -> Result<String, BuildError> {

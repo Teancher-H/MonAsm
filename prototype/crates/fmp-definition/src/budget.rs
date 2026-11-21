@@ -18,6 +18,7 @@
 //! no no-follow open, and that guarantee is the publication channel's, not this
 //! node's.
 
+use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
@@ -34,6 +35,8 @@ pub const CASES_BYTES: u64 = 16 << 20;
 pub const EVIDENCE_MANIFEST_BYTES: u64 = 1 << 20;
 /// A spec or a lock.
 pub const ARTIFACT_BYTES: u64 = 1 << 20;
+/// A committed sealed bundle: the 64 MiB closure budget plus a 16 MiB envelope.
+pub const SEALED_BYTES: u64 = 80 << 20;
 /// The pinned legacy definition read for row comparison.
 pub const LEGACY_DEFINITION_BYTES: u64 = 16 << 20;
 /// Manifest plus declared asset bytes, per package.
@@ -46,8 +49,16 @@ pub const ASSETS_PER_PACKAGE: u64 = 2048;
 pub const CASES_PER_PACKAGE: u64 = 4096;
 /// Evidence files per package.
 pub const EVIDENCE_FILES: u64 = 4096;
-/// Total evidence bytes per package.
+/// Total evidence bytes per package, excluding `tests/cases.json`.
 pub const EVIDENCE_BYTES: u64 = 16 << 20;
+/// Total package-root bytes read for one closure (§12.2).
+pub const CLOSURE_BYTES: u64 = 64 << 20;
+/// Packages per closure.
+pub const PACKAGES_PER_CLOSURE: u64 = 1024;
+/// Total declared assets per closure.
+pub const ASSETS_PER_CLOSURE: u64 = 65_536;
+/// Total evidence files per closure.
+pub const EVIDENCE_FILES_PER_CLOSURE: u64 = 65_536;
 /// One path, in bytes.
 pub const PATH_BYTES: u64 = 1024;
 /// JSON nesting depth, for every document the builder parses.
@@ -59,6 +70,13 @@ pub const DEPENDENCY_DEPTH: u64 = 64;
 /// assets per package, and total evidence bytes per package — and they are not
 /// interchangeable: a case file must not be able to spend the asset budget, and
 /// an asset must not be able to spend the evidence one.
+///
+/// `tests/cases.json` has its own per-file bound (`CASES_BYTES`) and is **not**
+/// charged to the evidence counter. §12.2's counterexample requires one package
+/// to carry 12 MiB of cases plus 12 MiB of evidence and still stay inside every
+/// per-package limit; counting cases as evidence would make that legal
+/// composition impossible. The closure counter below charges both, which is the
+/// budget that bounds the run.
 #[derive(Clone, Debug)]
 pub struct Counter {
     budget: &'static str,
@@ -83,9 +101,15 @@ impl Counter {
         )
     }
 
-    /// The §12 evidence counter: every evidence file the command reads.
+    /// The §12 evidence counter: every evidence file except `tests/cases.json`.
     pub fn evidence() -> Self {
         Counter::new("total evidence bytes per package", EVIDENCE_BYTES)
+    }
+
+    /// The case-file counter. One package has one case file, bounded by
+    /// [`CASES_BYTES`]; the counter exists so a second open cannot evade it.
+    pub fn cases() -> Self {
+        Counter::new("case file bytes per package", CASES_BYTES)
     }
 
     pub fn spent(&self) -> u64 {
@@ -110,6 +134,72 @@ impl Counter {
     }
 }
 
+/// The §12.2 closure counter: one per run, 64 MiB, charged **once** per distinct
+/// `(package root, path)`.
+///
+/// A command that opens the same file twice — for example a form asset that the
+/// evidence manifest also lists — pays for it once. The counted set is keyed by
+/// the declared package root as well as the file path, because the closure's
+/// conflict domain is repository-root-relative; two packages may legally hold
+/// the same package-root-relative path.
+#[derive(Clone, Debug)]
+pub struct ClosureCounter {
+    limit: u64,
+    spent: u64,
+    charged: BTreeSet<(String, String)>,
+}
+
+impl ClosureCounter {
+    pub fn new() -> Self {
+        ClosureCounter {
+            limit: CLOSURE_BYTES,
+            spent: 0,
+            charged: BTreeSet::new(),
+        }
+    }
+
+    pub fn spent(&self) -> u64 {
+        self.spent
+    }
+
+    pub fn remaining(&self) -> u64 {
+        self.limit.saturating_sub(self.spent)
+    }
+
+    pub fn limit(&self) -> u64 {
+        self.limit
+    }
+
+    /// Whether this root/path pair has already been charged in this run.
+    pub fn charged(&self, root: &str, path: &str) -> bool {
+        self.charged.contains(&(root.to_string(), path.to_string()))
+    }
+
+    /// Charge the raw byte length of one read, once per path.
+    ///
+    /// The crossing read is rejected before its bytes are added: `spent` is left
+    /// unchanged and the path is not marked as counted.
+    pub fn charge(&mut self, root: &str, path: &str, amount: u64) -> Result<(), BuildError> {
+        let key = (root.to_string(), path.to_string());
+        if self.charged.contains(&key) {
+            return Ok(());
+        }
+        let next = self.spent.saturating_add(amount);
+        if next > self.limit {
+            return Err(BuildError::AggregateLimit { limit: self.limit });
+        }
+        self.spent = next;
+        self.charged.insert(key);
+        Ok(())
+    }
+}
+
+impl Default for ClosureCounter {
+    fn default() -> Self {
+        ClosureCounter::new()
+    }
+}
+
 /// Open a leaf, check that the opened object is a regular file, and read it
 /// under both its own limit and the cumulative counter.
 ///
@@ -123,7 +213,32 @@ pub fn read_regular(
 ) -> Result<Vec<u8>, BuildError> {
     let display = path.display().to_string();
     let file = File::open(path).map_err(|error| BuildError::io(&display, error))?;
-    read_open(file, display, per_file, limit_name, counter)
+    read_open(file, display, per_file, limit_name, counter, None)
+}
+
+/// [`read_regular`], also charged against the one closure counter.
+///
+/// `root` is the declared package root and `relative` the package-root-relative
+/// path; together they form the counted key.
+pub fn read_regular_tracked(
+    path: &Path,
+    per_file: u64,
+    limit_name: &'static str,
+    counter: &mut Counter,
+    closure: &mut ClosureCounter,
+    root: &str,
+    relative: &str,
+) -> Result<Vec<u8>, BuildError> {
+    let display = path.display().to_string();
+    let file = File::open(path).map_err(|error| BuildError::io(&display, error))?;
+    read_open(
+        file,
+        display,
+        per_file,
+        limit_name,
+        counter,
+        Some((closure, root, relative)),
+    )
 }
 
 /// Read a file that is allowed to be absent.
@@ -138,9 +253,40 @@ pub fn read_optional(
     limit_name: &'static str,
     counter: &mut Counter,
 ) -> Result<Option<Vec<u8>>, BuildError> {
+    read_optional_inner(path, per_file, limit_name, counter, None)
+}
+
+/// [`read_optional`], also charged against the closure counter.
+pub fn read_optional_tracked(
+    path: &Path,
+    per_file: u64,
+    limit_name: &'static str,
+    counter: &mut Counter,
+    closure: &mut ClosureCounter,
+    root: &str,
+    relative: &str,
+) -> Result<Option<Vec<u8>>, BuildError> {
+    read_optional_inner(
+        path,
+        per_file,
+        limit_name,
+        counter,
+        Some((closure, root, relative)),
+    )
+}
+
+type Tracking<'a> = Option<(&'a mut ClosureCounter, &'a str, &'a str)>;
+
+fn read_optional_inner(
+    path: &Path,
+    per_file: u64,
+    limit_name: &'static str,
+    counter: &mut Counter,
+    tracking: Tracking<'_>,
+) -> Result<Option<Vec<u8>>, BuildError> {
     let display = path.display().to_string();
     match File::open(path) {
-        Ok(file) => read_open(file, display, per_file, limit_name, counter).map(Some),
+        Ok(file) => read_open(file, display, per_file, limit_name, counter, tracking).map(Some),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(BuildError::io(&display, error)),
     }
@@ -152,6 +298,7 @@ fn read_open(
     per_file: u64,
     limit_name: &'static str,
     counter: &mut Counter,
+    tracking: Tracking<'_>,
 ) -> Result<Vec<u8>, BuildError> {
     let metadata = file
         .metadata()
@@ -165,6 +312,16 @@ fn read_open(
             budget: limit_name,
             limit: allowance,
         });
+    }
+    // §12.2 rejects at the read that would cross the closure limit. The metadata
+    // hint is enough to stop before the crossing bytes; the post-read charge
+    // catches a file that grew between the hint and the read.
+    if let Some((closure, root, relative)) = tracking.as_ref() {
+        if !closure.charged(root, relative) && metadata.len() > closure.remaining() {
+            return Err(BuildError::AggregateLimit {
+                limit: closure.limit(),
+            });
+        }
     }
     // One byte past the allowance is enough to detect a file that grew after the
     // hint without reading an unbounded stream.
@@ -181,6 +338,9 @@ fn read_open(
         });
     }
     counter.charge(read as u64)?;
+    if let Some((closure, root, relative)) = tracking {
+        closure.charge(root, relative, read as u64)?;
+    }
     Ok(bytes)
 }
 
@@ -235,4 +395,30 @@ pub fn check_path_length(field: &'static str, value: &str) -> Result<(), BuildEr
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_closure_path_is_charged_once_and_the_crossing_read_is_refused() {
+        let mut closure = ClosureCounter::new();
+        closure.charge("packages/x/a/0.1.0", "NOTICE", 10).unwrap();
+        closure.charge("packages/x/a/0.1.0", "NOTICE", 10).unwrap();
+        assert_eq!(closure.spent(), 10, "a path is paid for once per root");
+
+        // The same package-relative path under another root is another file.
+        closure.charge("packages/x/b/0.1.0", "NOTICE", 10).unwrap();
+        assert_eq!(closure.spent(), 20);
+
+        let mut small = ClosureCounter::new();
+        small.charge("root", "a", CLOSURE_BYTES).unwrap();
+        let error = small
+            .charge("root", "b", 1)
+            .expect_err("the next byte crosses the limit");
+        assert_eq!(error.code(), "aggregate-limit");
+        assert_eq!(small.spent(), CLOSURE_BYTES);
+        assert!(!small.charged("root", "b"), "a refused read is not counted");
+    }
 }
